@@ -87,6 +87,7 @@ h2{margin:0 0 14px;font-size:19px}
 <button class="lap" onclick="lapTimer()">↪ Volta</button>
 <button class="reset" onclick="resetTimer()">↺ Zerar</button>
 </div>
+<button class="save" onclick="editTimer()">✏️ Editar tempo acumulado</button><div class="export-note">Você pode editar o tempo acumulado quando precisar. Ex.: parou em 01:42:18, edite para 01:42:18 e depois clique em Iniciar para continuar.</div>
 <button class="save" onclick="saveProject()">💾 Salvar tempo do projeto</button><button class="save" onclick="exportExcel()">📊 Exportar relatório Excel</button>
 
 <div class="laps" id="laps">
@@ -131,7 +132,9 @@ function currentElapsed(){
 function render(){
   const total = currentElapsed();
   document.getElementById("timer").textContent=fmt(total);
-  document.getElementById("status").textContent=state.running?"Cronômetro em andamento":"Cronômetro pausado";
+  document.getElementById("status").textContent =
+    state.running ? "Cronômetro em andamento" :
+    (state.elapsed > 0 ? "Cronômetro pausado — tempo acumulado pode ser continuado" : "Pronto para iniciar");
   const list=document.getElementById("lapList");
   const box=document.getElementById("laps");
   if(state.laps.length){
@@ -184,6 +187,64 @@ function lapTimer(){
   saveDraft();
   render();
 }
+function editTimer(){
+  // A edição é feita sobre o TEMPO ACUMULADO do cronômetro, nunca sobre o relógio do computador.
+  if(state.running){
+    pauseTimer();
+  }
+
+  const atual = fmt(state.elapsed);
+  const valor = prompt(
+    "Digite o novo tempo acumulado do cronômetro no formato HH:MM:SS.\n\n" +
+    "Exemplo: 01:42:18\n\n" +
+    "Tempo atual: " + atual,
+    atual
+  );
+
+  if(valor === null) return;
+
+  const texto = valor.trim();
+  const partes = texto.split(":").map(Number);
+
+  if(partes.length !== 3 || partes.some(n => !Number.isFinite(n) || n < 0 || !Number.isInteger(n))){
+    alert("Formato inválido. Use HH:MM:SS. Exemplo: 01:42:18");
+    return;
+  }
+
+  const [h,m,s] = partes;
+  if(m > 59 || s > 59){
+    alert("Minutos e segundos devem ficar entre 00 e 59.");
+    return;
+  }
+
+  const novoTempo = ((h * 60 + m) * 60 + s) * 1000;
+
+  // Evita que uma nova volta fique com tempo negativo quando já existem voltas registradas.
+  const ultimoTotal = state.laps.reduce((max, lap) => {
+    const total = typeof lap === "number"
+      ? 0
+      : Number(lap.endElapsed || lap.totalElapsed || 0);
+    return Math.max(max, total);
+  }, 0);
+
+  if(novoTempo < ultimoTotal){
+    alert(
+      "O novo tempo não pode ser menor que o total da última volta registrada (" +
+      fmt(ultimoTotal) + ")."
+    );
+    return;
+  }
+
+  state.elapsed = novoTempo;
+  state.lastStart = null;
+  state.running = false;
+
+  saveDraft();
+  render();
+
+  alert("Tempo acumulado ajustado para " + fmt(novoTempo) + ". Agora você pode clicar em ▶ Iniciar para continuar desse ponto.");
+}
+
 function resetTimer(){
   if(!confirm("Zerar o cronômetro e apagar as voltas atuais?"))return;
   clearInterval(interval);
