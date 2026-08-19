@@ -257,16 +257,18 @@ function exportExcel(){
   let body="";
   data.forEach(item=>{
     const laps=item.laps||[];
-    const base=Number(item.sessionStartAt||0) || Date.now();
     if(!laps.length){
-      body += `<tr><td></td><td></td><td>00:00:00</td><td></td><td></td><td></td><td></td></tr>`;
+      const total=Number(item.elapsed||0);
+      body += `<tr><td>00:00:00</td><td>${excelTime(total)}</td><td>${excelTime(total)}</td><td></td><td></td><td></td><td></td></tr>`;
     }else{
       laps.forEach((lap,i)=>{
         const duration=Number(lap.duration||0);
         const startElapsed=Number(lap.startElapsed||0);
         const endElapsed=Number(lap.endElapsed||lap.totalElapsed||startElapsed+duration);
-        const inicio=clockFromElapsed(base,startElapsed);
-        const fim=clockFromElapsed(base,endElapsed);
+        // IMPORTANTE: INÍCIO e FIM usam o tempo acumulado do cronômetro,
+        // e não a hora do relógio do computador.
+        const inicio=excelTime(startElapsed);
+        const fim=excelTime(endElapsed);
         body += `<tr>
           <td>${inicio}</td><td>${fim}</td><td>${excelTime(duration)}</td>
           <td>${esc(lap.reason||"")}</td><td></td><td></td><td></td>
