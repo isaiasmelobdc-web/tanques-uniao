@@ -129,17 +129,24 @@ function currentElapsed(){
   return state.running ? state.elapsed + (Date.now()-state.lastStart) : state.elapsed;
 }
 function render(){
-  document.getElementById("timer").textContent=fmt(currentElapsed());
+  const total = currentElapsed();
+  document.getElementById("timer").textContent=fmt(total);
   document.getElementById("status").textContent=state.running?"Cronômetro em andamento":"Cronômetro pausado";
   const list=document.getElementById("lapList");
   const box=document.getElementById("laps");
   if(state.laps.length){
     box.style.display="block";
     list.innerHTML=state.laps.map((lap,i)=>{
-    const duration = typeof lap === "number" ? lap : Number(lap.duration || 0);
-    const reason = typeof lap === "number" ? "" : (lap.reason || "");
-    return `<div class="lap-item"><span>Volta ${i+1}${reason ? " — " + esc(reason) : ""}</span><strong>${fmt(duration)}</strong></div>`;
-  }).join("");
+      const duration = typeof lap === "number" ? lap : Number(lap.duration || 0);
+      const totalAtLap = typeof lap === "number"
+        ? state.laps.slice(0,i+1).reduce((sum,v)=>sum + (typeof v==="number" ? v : Number(v.duration||0)),0)
+        : Number(lap.totalElapsed ?? 0);
+      const reason = typeof lap === "number" ? "" : (lap.reason || "");
+      return `<div class="lap-item">
+        <span>Volta ${i+1}${reason ? " — " + esc(reason) : ""}</span>
+        <span><strong>Volta: ${fmt(duration)}</strong> • <strong>Total: ${fmt(totalAtLap)}</strong></span>
+      </div>`;
+    }).join("");
   }else box.style.display="none";
 }
 function startTimer(){
@@ -170,6 +177,7 @@ function lapTimer(){
 
   state.laps.push({
     duration: lapTime,
+    totalElapsed: elapsedNow,
     reason: reason.trim() || "Sem motivo informado"
   });
 
@@ -206,6 +214,7 @@ function saveProject(){
     elapsed: currentElapsed,
     laps: state.laps.map(lap => ({
       duration: typeof lap === "number" ? lap : Number(lap.duration || 0),
+      totalElapsed: typeof lap === "number" ? 0 : Number(lap.totalElapsed || 0),
       reason: typeof lap === "number" ? "" : (lap.reason || "")
     }))
   };
@@ -382,6 +391,63 @@ function clearProjectSelection(){
   document.querySelectorAll("#projectList .project-export-check").forEach(el=>el.checked=false);
   updateExportButton();
 }
+function loadProject(id){
+  const data = loadProjects();
+  const item = data.find(x => Number(x.id) === Number(id));
+  if(!item){
+    alert("Projeto não encontrado.");
+    renderProjects();
+    return;
+  }
+
+  clearInterval(interval);
+  state = {
+    elapsed: Number(item.elapsed || 0),
+    running: false,
+    lastStart: null,
+    laps: Array.isArray(item.laps) ? item.laps.map(lap => ({
+      duration: typeof lap === "number" ? Number(lap) : Number(lap.duration || 0),
+      totalElapsed: typeof lap === "number" ? 0 : Number(lap.totalElapsed || 0),
+      reason: typeof lap === "number" ? "" : (lap.reason || "")
+    })) : [],
+    project: item.project || "",
+    date: item.date || ""
+  };
+
+  document.getElementById("project").value = item.project || "";
+  document.getElementById("date").value = item.date || today();
+  if(document.getElementById("lean")) document.getElementById("lean").value = item.lean || "";
+  if(document.getElementById("linhaProducao")) document.getElementById("linhaProducao").value = item.linhaProducao || "";
+  if(document.getElementById("etapaProcesso")) document.getElementById("etapaProcesso").value = item.etapaProcesso || "";
+  if(document.getElementById("responsavel")) document.getElementById("responsavel").value = item.responsavel || "";
+
+  saveDraft();
+  render();
+  window.scrollTo({top:0, behavior:"smooth"});
+}
+
+function deleteProject(id){
+  const data = loadProjects();
+  const item = data.find(x => Number(x.id) === Number(id));
+  if(!item){
+    alert("Projeto já foi excluído ou não foi encontrado.");
+    renderProjects();
+    return;
+  }
+
+  if(!confirm(`Excluir o projeto "${item.project || "Sem projeto"}"?\n\nEssa ação não poderá ser desfeita.`)) return;
+
+  const updated = data.filter(x => Number(x.id) !== Number(id));
+  try{
+    localStorage.setItem(PROJECTS_KEY, JSON.stringify(updated));
+    renderProjects();
+    alert("Projeto excluído com sucesso!");
+  }catch(e){
+    console.error(e);
+    alert("Não foi possível excluir o projeto. Verifique o armazenamento do navegador.");
+  }
+}
+
 function renderProjects(){
   const box=document.getElementById("projectList");
   if(!box) return;
