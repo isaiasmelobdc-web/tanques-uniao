@@ -111,7 +111,7 @@ h2{margin:0 0 14px;font-size:19px}
 const KEY="tanques_uniao_cronometro_v1";
 const PROJECTS_KEY="tanques_uniao_projetos_v2";
 const DRAFT_KEY="tanques_uniao_rascunho_v2";
-let state={elapsed:0,running:false,lastStart:null,laps:[],project:"",date:""};
+let state={elapsed:0,running:false,lastStart:null,laps:[],project:"",date:"",sessionStartAt:null};
 let interval=null;
 
 function pad(n){return String(n).padStart(2,"0")}
@@ -129,17 +129,24 @@ function currentElapsed(){
   return state.running ? state.elapsed + (Date.now()-state.lastStart) : state.elapsed;
 }
 function render(){
-  document.getElementById("timer").textContent=fmt(currentElapsed());
+  const total = currentElapsed();
+  document.getElementById("timer").textContent=fmt(total);
   document.getElementById("status").textContent=state.running?"Cronômetro em andamento":"Cronômetro pausado";
   const list=document.getElementById("lapList");
   const box=document.getElementById("laps");
   if(state.laps.length){
     box.style.display="block";
     list.innerHTML=state.laps.map((lap,i)=>{
-    const duration = typeof lap === "number" ? lap : Number(lap.duration || 0);
-    const reason = typeof lap === "number" ? "" : (lap.reason || "");
-    return `<div class="lap-item"><span>Volta ${i+1}${reason ? " — " + esc(reason) : ""}</span><strong>${fmt(duration)}</strong></div>`;
-  }).join("");
+      const duration = typeof lap === "number" ? lap : Number(lap.duration || 0);
+      const totalAtLap = typeof lap === "number"
+        ? state.laps.slice(0,i+1).reduce((sum,v)=>sum + (typeof v==="number" ? v : Number(v.duration||0)),0)
+        : Number(lap.totalElapsed ?? 0);
+      const reason = typeof lap === "number" ? "" : (lap.reason || "");
+      return `<div class="lap-item">
+        <span>Volta ${i+1}${reason ? " — " + esc(reason) : ""}</span>
+        <span><strong>Volta: ${fmt(duration)}</strong> • <strong>Total: ${fmt(totalAtLap)}</strong></span>
+      </div>`;
+    }).join("");
   }else box.style.display="none";
 }
 function startTimer(){
@@ -154,23 +161,24 @@ function pauseTimer(){
 }
 function lapTimer(){
   if(!state.running){
-    alert("Inicie o cronômetro primeiro.");
+    alert("Inicie o cronômetro antes de registrar uma atividade.");
     return;
   }
-
-  const reason = prompt("Digite o motivo desta volta:");
+  const reason = prompt("Digite a atividade que está sendo realizada:");
   if(reason === null) return;
 
   const elapsedNow = Date.now() - state.lastStart + state.elapsed;
-  const previousLaps = state.laps.reduce((sum, lap) => {
-    return sum + (typeof lap === "number" ? lap : Number(lap.duration || 0));
-  }, 0);
-
+  const previousLaps = state.laps.reduce((sum, lap) => sum + Number(lap.duration || 0), 0);
   const lapTime = Math.max(0, elapsedNow - previousLaps);
+  const startElapsed = previousLaps;
+  const endElapsed = elapsedNow;
 
   state.laps.push({
     duration: lapTime,
-    reason: reason.trim() || "Sem motivo informado"
+    totalElapsed: elapsedNow,
+    startElapsed,
+    endElapsed,
+    reason: reason.trim() || "Sem atividade informada"
   });
 
   saveDraft();
@@ -179,7 +187,7 @@ function lapTimer(){
 function resetTimer(){
   if(!confirm("Zerar o cronômetro e apagar as voltas atuais?"))return;
   clearInterval(interval);
-  state={elapsed:0,running:false,lastStart:null,laps:[],project:document.getElementById("project").value,date:document.getElementById("date").value};
+  state={elapsed:0,running:false,lastStart:null,laps:[],project:document.getElementById("project").value,date:document.getElementById("date").value,sessionStartAt:null};
   render();
 }
 function saveProject(){
@@ -204,8 +212,12 @@ function saveProject(){
     responsavel: document.getElementById("responsavel")?.value.trim() || "",
     date: date || new Date().toISOString().slice(0,10),
     elapsed: currentElapsed,
+    sessionStartAt: state.sessionStartAt || (Date.now() - currentElapsed),
     laps: state.laps.map(lap => ({
       duration: typeof lap === "number" ? lap : Number(lap.duration || 0),
+      totalElapsed: typeof lap === "number" ? 0 : Number(lap.totalElapsed || 0),
+      startElapsed: typeof lap === "number" ? 0 : Number(lap.startElapsed || 0),
+      endElapsed: typeof lap === "number" ? Number(lap) : Number(lap.endElapsed || lap.totalElapsed || 0),
       reason: typeof lap === "number" ? "" : (lap.reason || "")
     }))
   };
@@ -224,92 +236,67 @@ function saveProject(){
   }
 }
 
+function excelTime(ms){
+  const totalSeconds=Math.max(0,Math.floor(ms/1000));
+  const h=Math.floor(totalSeconds/3600);
+  const m=Math.floor((totalSeconds%3600)/60);
+  const sec=totalSeconds%60;
+  return `${pad(h)}:${pad(m)}:${pad(sec)}`;
+}
+function clockFromElapsed(baseMs, elapsedMs){
+  const d=new Date(baseMs + Math.max(0,elapsedMs));
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
 function exportExcel(){
   const allProjects=loadProjects();
-  if(!allProjects.length){
-    alert("Nenhum projeto salvo para exportar.");
-    return;
-  }
-
+  if(!allProjects.length){ alert("Nenhum projeto salvo para exportar."); return; }
   const selectedIds=getSelectedProjectIds();
-  if(!selectedIds.length){
-    alert("Marque pelo menos um projeto na caixa de seleção.");
-    return;
-  }
+  if(!selectedIds.length){ alert("Marque pelo menos um projeto na caixa de seleção."); return; }
   const data=allProjects.filter(item=>selectedIds.includes(Number(item.id)));
-  const escXls = s => String(s ?? "")
-    .replace(/&/g,"&amp;")
-    .replace(/</g,"&lt;")
-    .replace(/>/g,"&gt;")
-    .replace(/"/g,"&quot;");
-
+  const esc=s=>String(s??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
   let body="";
   data.forEach(item=>{
     const laps=item.laps||[];
+    const base=Number(item.sessionStartAt||0) || Date.now();
     if(!laps.length){
-      body += `<tr>
-        <td>${escXls(item.date||"")}</td>
-        <td>${escXls(item.project||"")}</td>
-        <td></td><td></td><td></td>
-        <td>${escXls(item.etapaProcesso||"")}</td>
-        <td>${escXls(fmt(item.elapsed||0))}</td>
-      </tr>`;
+      body += `<tr><td></td><td></td><td>00:00:00</td><td></td><td></td><td></td><td></td></tr>`;
     }else{
       laps.forEach((lap,i)=>{
-        const duration=typeof lap==="number"?lap:Number(lap.duration||0);
-        const reason=typeof lap==="number"?"":(lap.reason||"");
+        const duration=Number(lap.duration||0);
+        const startElapsed=Number(lap.startElapsed||0);
+        const endElapsed=Number(lap.endElapsed||lap.totalElapsed||startElapsed+duration);
+        const inicio=clockFromElapsed(base,startElapsed);
+        const fim=clockFromElapsed(base,endElapsed);
         body += `<tr>
-          <td>${escXls(item.date||"")}</td>
-          <td>${escXls(item.project||"")}</td>
-          <td>${i+1}</td>
-          <td>${escXls(fmt(duration))}</td>
-          <td>${escXls(reason)}</td>
-          <td>${escXls(item.etapaProcesso||"")}</td>
-          <td>${escXls(fmt(item.elapsed||0))}</td>
+          <td>${inicio}</td><td>${fim}</td><td>${excelTime(duration)}</td>
+          <td>${esc(lap.reason||"")}</td><td></td><td></td><td></td>
         </tr>`;
       });
     }
   });
-
   const first=data[0]||{};
-  const lean=first.lean||"";
-  const linha=first.linhaProducao||"";
-  const etapa=first.etapaProcesso||"";
-  const resp=first.responsavel||"";
+  const service=first.project||"";
+  const obra=first.linhaProducao||"";
+  const frente=first.etapaProcesso||"";
+  const responsavel=first.responsavel||"";
   const dataRel=first.date||"";
-
   const xls=`<!DOCTYPE html><html><head><meta charset="UTF-8">
-<style>
-body{font-family:Arial,sans-serif;margin:25px;color:#222}
-table{border-collapse:collapse;width:100%}
-.title{font-size:28px;font-weight:bold;text-align:center;border:2px solid #222;padding:14px}
-.info-label{font-weight:bold;background:#eee;border:1px solid #777;padding:8px}
-.info-value{border:1px solid #777;padding:8px}
-th{background:#d9e2f3;border:1px solid #555;padding:9px;font-weight:bold;text-align:center}
-td{border:1px solid #777;padding:8px}
-.section{font-size:16px;font-weight:bold;padding:10px 0}
-</style></head><body>
-<table>
-<tr><td colspan="7" class="title">LEAN</td></tr>
-<tr><td class="info-label">Linha de Produção</td><td colspan="2" class="info-value">${escXls(linha)}</td>
-<td class="info-label">Etapa do Processo</td><td colspan="3" class="info-value">${escXls(etapa)}</td></tr>
-<tr><td class="info-label">Responsável</td><td colspan="2" class="info-value">${escXls(resp)}</td>
-<td class="info-label">Data</td><td colspan="3" class="info-value">${escXls(dataRel)}</td></tr>
-<tr><td colspan="7" class="section">REGISTRO DAS VOLTAS</td></tr>
-<tr><th>Data</th><th>Projeto</th><th>Volta</th><th>Tempo da Volta</th><th>Motivo</th><th>Etapa do Processo</th><th>Tempo Total</th></tr>
-${body}</table></body></html>`;
-
+  <style>
+  body{font-family:Arial,sans-serif;margin:18px;color:#222} table{border-collapse:collapse;width:100%} td,th{border:1px solid #777;padding:7px;font-size:12px} .title{font-size:24px;font-weight:bold;text-align:center;border:2px solid #222;padding:12px;background:#fff} .label{font-weight:bold;background:#eee}.head{font-weight:bold;text-align:center;background:#d9e2f3}.fep-row td{height:25px}.note{font-size:11px;color:#555;margin:8px 0}</style></head><body>
+  <table>
+  <tr><td colspan="7" class="title">FEP (FOLHA DE ESTUDO DE PROCESSOS)</td></tr>
+  <tr><td class="label">SERVIÇO:</td><td colspan="2">${esc(service)}</td><td class="label">OBRA:</td><td colspan="3">${esc(obra)}</td></tr>
+  <tr><td class="label">FRENTE:</td><td colspan="2">${esc(frente)}</td><td class="label">DATA:</td><td colspan="3">${esc(dataRel)}</td></tr>
+  <tr><td class="label">RESPONSÁVEL:</td><td colspan="6">${esc(responsavel)}</td></tr>
+  <tr><th class="head">INÍCIO</th><th class="head">FIM</th><th class="head">INTERVALO</th><th class="head">ATIVIDADE</th><th class="head">OBSERVAÇÃO</th><th class="head">CLASSIFICAÇÃO DAS ATIVIDADES</th><th class="head">SUB-CLASSIFICAÇÃO DAS ATIVIDADES</th></tr>
+  ${body}
+  </table>
+  <div class="note">Gerado pelo Cronômetro de Produção — cada "Volta" registrada no aplicativo corresponde a uma atividade da FEP. O intervalo é o tempo medido pelo cronômetro.</div>
+  </body></html>`;
   const blob=new Blob([xls],{type:"application/vnd.ms-excel"});
-  const url=URL.createObjectURL(blob);
-  const a=document.createElement("a");
-  a.href=url;
-  a.download="Relatorio_LEAN_Tanques_Uniao.xls";
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
+  const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url;
+  a.download="FEP_Estudo_de_Processos_Tanques_Uniao.xls"; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
 }
-
 
 function loadProjects(){
   try{
@@ -325,6 +312,7 @@ function saveDraft(){
   try{
     const draft = {
       elapsed: state.elapsed,
+      sessionStartAt: state.sessionStartAt,
       running: state.running,
       lastStart: state.lastStart,
       laps: state.laps,
@@ -344,6 +332,7 @@ function loadDraft(){
     const draft = JSON.parse(localStorage.getItem(DRAFT_KEY) || "null");
     if(!draft) return;
     state.elapsed = Number(draft.elapsed || 0);
+    state.sessionStartAt = Number(draft.sessionStartAt || 0) || null;
     state.running = false; // nunca retoma cronômetro automaticamente
     state.lastStart = null;
     state.laps = Array.isArray(draft.laps) ? draft.laps : [];
@@ -382,6 +371,63 @@ function clearProjectSelection(){
   document.querySelectorAll("#projectList .project-export-check").forEach(el=>el.checked=false);
   updateExportButton();
 }
+function loadProject(id){
+  const data = loadProjects();
+  const item = data.find(x => Number(x.id) === Number(id));
+  if(!item){
+    alert("Projeto não encontrado.");
+    renderProjects();
+    return;
+  }
+
+  clearInterval(interval);
+  state = {
+    elapsed: Number(item.elapsed || 0),
+    running: false,
+    lastStart: null,
+    laps: Array.isArray(item.laps) ? item.laps.map(lap => ({
+      duration: typeof lap === "number" ? Number(lap) : Number(lap.duration || 0),
+      totalElapsed: typeof lap === "number" ? 0 : Number(lap.totalElapsed || 0),
+      reason: typeof lap === "number" ? "" : (lap.reason || "")
+    })) : [],
+    project: item.project || "",
+    date: item.date || ""
+  };
+
+  document.getElementById("project").value = item.project || "";
+  document.getElementById("date").value = item.date || today();
+  if(document.getElementById("lean")) document.getElementById("lean").value = item.lean || "";
+  if(document.getElementById("linhaProducao")) document.getElementById("linhaProducao").value = item.linhaProducao || "";
+  if(document.getElementById("etapaProcesso")) document.getElementById("etapaProcesso").value = item.etapaProcesso || "";
+  if(document.getElementById("responsavel")) document.getElementById("responsavel").value = item.responsavel || "";
+
+  saveDraft();
+  render();
+  window.scrollTo({top:0, behavior:"smooth"});
+}
+
+function deleteProject(id){
+  const data = loadProjects();
+  const item = data.find(x => Number(x.id) === Number(id));
+  if(!item){
+    alert("Projeto já foi excluído ou não foi encontrado.");
+    renderProjects();
+    return;
+  }
+
+  if(!confirm(`Excluir o projeto "${item.project || "Sem projeto"}"?\n\nEssa ação não poderá ser desfeita.`)) return;
+
+  const updated = data.filter(x => Number(x.id) !== Number(id));
+  try{
+    localStorage.setItem(PROJECTS_KEY, JSON.stringify(updated));
+    renderProjects();
+    alert("Projeto excluído com sucesso!");
+  }catch(e){
+    console.error(e);
+    alert("Não foi possível excluir o projeto. Verifique o armazenamento do navegador.");
+  }
+}
+
 function renderProjects(){
   const box=document.getElementById("projectList");
   if(!box) return;
